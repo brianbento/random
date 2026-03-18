@@ -6,6 +6,7 @@ set -euo pipefail
 ROCM_MAJOR_VER=7
 GFX=gfx1151
 ROCM_PATH=/opt/rocm-7.0
+LLAMA_PREFIX=/opt/llama-hip
 LLAMA_REPO=https://github.com/ggerganov/llama.cpp.git
 LLAMA_BRANCH=master
 
@@ -46,7 +47,7 @@ export HIP_CLANG_PATH=/opt/rocm-7.0/llvm/bin
 export HIP_INCLUDE_PATH=/opt/rocm-7.0/include
 export HIP_LIB_PATH=/opt/rocm-7.0/lib
 export HIP_DEVICE_LIB_PATH=/opt/rocm-7.0/lib/llvm/amdgcn/bitcode
-export PATH="$ROCM_PATH/bin:$HIP_CLANG_PATH:$PATH"
+export PATH="/opt/llama-hip/bin:$ROCM_PATH/bin:$HIP_CLANG_PATH:$PATH"
 export LD_LIBRARY_PATH="$HIP_LIB_PATH:$ROCM_PATH/lib:$ROCM_PATH/lib64:$ROCM_PATH/llvm/lib"
 export LIBRARY_PATH="$HIP_LIB_PATH:$ROCM_PATH/lib:$ROCM_PATH/lib64"
 export CPATH="$HIP_INCLUDE_PATH"
@@ -60,8 +61,8 @@ source /etc/profile.d/rocm.sh
 
 # ── 5. Build llama.cpp ────────────────────────────────────────────────────────
 echo "==> Cloning llama.cpp (${LLAMA_BRANCH})..."
-sudo mkdir -p /opt/llama.cpp
-sudo chown "$(id -u):$(id -g)" /opt/llama.cpp
+sudo mkdir -p /opt/llama.cpp "${LLAMA_PREFIX}"
+sudo chown "$(id -u):$(id -g)" /opt/llama.cpp "${LLAMA_PREFIX}"
 git clone -b "${LLAMA_BRANCH}" --single-branch --recursive "${LLAMA_REPO}" /opt/llama.cpp
 cd /opt/llama.cpp
 git clean -xdf
@@ -73,12 +74,13 @@ cmake -S . -B build \
   -DAMDGPU_TARGETS="${GFX}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DGGML_RPC=ON \
-  -DLLAMA_HIP_UMA=ON
+  -DLLAMA_HIP_UMA=ON \
+  -DCMAKE_INSTALL_PREFIX="${LLAMA_PREFIX}"
 cmake --build build --config Release -- -j"$(nproc)"
-sudo cmake --install build --config Release
+cmake --install build --config Release
 
-# Copy RPC server binaries explicitly (install may not include them)
-sudo cp /opt/llama.cpp/build/bin/rpc-* /usr/local/bin/ 2>/dev/null || true
+# Copy RPC server binaries (install may not include them)
+cp /opt/llama.cpp/build/bin/rpc-* "${LLAMA_PREFIX}/bin/" 2>/dev/null || true
 
 # ── 6. Trim static libs / headers from ROCm to save space (optional) ─────────
 echo "==> Removing ROCm static libs and headers to save disk space..."
@@ -89,10 +91,10 @@ sudo rm -rf \
   "${ROCM_PATH}/llvm/include" \
   "${ROCM_PATH}/llvm/share"
 
-# ── 7. ldconfig for /usr/local libs ──────────────────────────────────────────
+# ── 7. ldconfig ───────────────────────────────────────────────────────────────
 echo "==> Configuring ldconfig..."
-echo "/usr/local/lib"   | sudo tee    /etc/ld.so.conf.d/local.conf > /dev/null
-echo "/usr/local/lib64" | sudo tee -a /etc/ld.so.conf.d/local.conf > /dev/null
+printf '/opt/llama-hip/lib\n/opt/llama-hip/lib64\n' \
+  | sudo tee /etc/ld.so.conf.d/llama-hip.conf > /dev/null
 sudo ldconfig
 
 echo ""
